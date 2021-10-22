@@ -1,0 +1,6 @@
+ico/node_modules/
+ico/package-lock.json
+ico/dist/
+.DS_store
+.vscode/
+build/

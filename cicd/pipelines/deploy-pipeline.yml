@@ -1,0 +1,94 @@
+name: avicoin-webapp-deploy-$(Date:yyyyMMdd)
+
+trigger:
+  - main
+
+pool:
+  name: Azure Pipelines
+  vmImage: ubuntu-latest
+
+variables:
+  - template: deploy-pipeline.vars.yml
+
+stages:
+  - stage: Build
+    jobs:
+      - job: DeployResourcesToAzure
+        displayName: Deploy Resources To Azure
+        steps:
+          - task: AzureCLI@2
+            displayName: Create rg, app plan and app service
+            inputs:
+              azureSubscription: $(serviceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az deployment sub create \
+                -f $(System.DefaultWorkingDirectory)/cicd/azure-resources/main.bicep \
+                -n $(Build.BuildId) \
+                -l westeurope \
+                -p webAppName=$(webAppName)
+
+      - job: BuildReactApp
+        displayName: Build React App
+        dependsOn: DeployResourcesToAzure
+        steps:
+          - task: NodeTool@0
+            displayName: Install Node.js
+            inputs:
+              versionSpec: "14.x"
+
+          - task: Npm@1
+            displayName: Install dependencies
+            inputs:
+              command: install
+              workingDir: $(workingDir)
+
+          - task: Npm@1
+            displayName: Build application
+            inputs:
+              command: custom
+              customCommand: run-script build
+              workingDir: $(workingDir)
+
+          - task: CopyFiles@2
+            displayName: Copy files
+            inputs:
+              sourceFolder: $(workingDir)/build
+              Contents: "**"
+              TargetFolder: $(Build.ArtifactStagingDirectory)
+              cleanTargetFolder: true
+
+          - task: ArchiveFiles@2
+            displayName: Archive files
+            inputs:
+              rootFolderOrFile: $(Build.ArtifactStagingDirectory)
+              includeRootFolder: false
+              archiveType: zip
+              archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+              replaceExistingArchive: true
+
+          - task: PublishBuildArtifacts@1
+            displayName: Publish Build Artifacts
+            inputs:
+              pathtoPublish: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+              artifactName: drop
+
+      - job: PublishAppToAzureResource
+        displayName: Publish App To Azure App Service
+        dependsOn: BuildReactApp
+        steps:
+          - task: DownloadBuildArtifacts@0
+            displayName: Download archived files
+            inputs:
+              buildType: current
+              downloadType: single
+              artifactName: drop
+              downloadPath: $(System.ArtifactsDirectory)
+
+          - task: AzureWebApp@1
+            displayName: Azure WebApp Deploy
+            inputs:
+              azureSubscription: $(serviceConnection)
+              appName: $(webAppName)
+              package: $(System.ArtifactsDirectory)/**/*.zip
